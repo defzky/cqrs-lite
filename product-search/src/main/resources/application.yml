@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: product-search
+  
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/product}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres123}
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 2
+  
+  jpa:
+    hibernate:
+      ddl-auto: none
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+server:
+  port: ${SERVER_PORT:8081}
+
+nats:
+  url: ${NATS_URL:nats://localhost:4222}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    com.example.productsearch: DEBUG

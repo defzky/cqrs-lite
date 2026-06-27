@@ -1,0 +1,171 @@
+# CQRS Lite Stack (~500MB total)
+# Arsitektur:
+#   product-backend ──JDBC──▶ postgres ──CDC(Debezium Server)──▶ NATS
+#                                                           │
+#                                  product-search ◀─consume─┘  ──index──▶ PostgreSQL FTS
+#
+# Port host:
+#   postgres 5433 · backend 8080 · search 8081 · NATS 4222 · NATS monitor 8222
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: cqrs-postgres
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=16MB
+    environment:
+      POSTGRES_DB: product
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d product"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: cqrs-nats
+    command:
+      - "--jetstream"
+      - "--store_dir=/data"
+      - "-m"
+      - "8222"
+      - "--http_port=8222"
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8222/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # Debezium Server - standalone CDC (tanpa Kafka Connect)
+  # NOTE: Untuk demo ini, CDC di-skip karena butuh konfigurasi NATS JetStream stream
+  # Stream akan di-create secara manual setelah NATS running
+  # Uncomment section ini untuk mengaktifkan CDC
+  #
+  # debezium-server:
+  #   image: debezium/server:2.7
+  #   container_name: cqrs-debezium
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     nats:
+  #       condition: service_healthy
+  #   environment:
+  #     DEBEZIUM_SOURCE_CONNECTOR_CLASS: io.debezium.connector.postgresql.PostgresConnector
+  #     DEBEZIUM_SOURCE_OFFSET_STORAGE_FILE_FILENAME: /data/offsets.dat
+  #     DEBEZIUM_SOURCE_OFFSET_FLUSH_INTERVAL_MS: 10000
+  #     DEBEZIUM_SOURCE_DATABASE_HOSTNAME: postgres
+  #     DEBEZIUM_SOURCE_DATABASE_PORT: 5432
+  #     DEBEZIUM_SOURCE_DATABASE_USER: postgres
+  #     DEBEZIUM_SOURCE_DATABASE_PASSWORD: postgres123
+  #     DEBEZIUM_SOURCE_DATABASE_DBNAME: product
+  #     DEBEZIUM_SOURCE_TOPIC_PREFIX: product
+  #     DEBEZIUM_SOURCE_PLUGIN_NAME: pgoutput
+  #     DEBEZIUM_SOURCE_TABLE_INCLUDE_LIST: public.products,public.categories,public.brands
+  #     DEBEZIUM_SINK_TYPE: nats
+  #     DEBEZIUM_SINK_NATS_URL: nats://nats:4222
+  #   volumes:
+  #     - debezium-data:/data
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 256M
+
+  product-backend:
+    build:
+      context: ./product-backend
+    container_name: product-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/product
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres123
+      SERVER_PORT: "8080"
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  product-search:
+    build:
+      context: ./product-search
+    container_name: product-search
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/product
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres123
+      SERVER_PORT: "8081"
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: product-frontend
+    depends_on:
+      - product-backend
+      - product-search
+    ports:
+      - "3000:80"
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+volumes:
+  postgres-data:
+  nats-data:
+  # debezium-data:  # Uncomment jika menggunakan Debezium

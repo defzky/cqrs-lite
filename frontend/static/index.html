@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CQRS Product Demo (Lite)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        h1 { margin-bottom: 20px; color: #333; }
+        
+        .search-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+        .search-bar input { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
+        .search-bar button { padding: 12px 24px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .search-bar button:hover { background: #0056b3; }
+        
+        .main { display: grid; grid-template-columns: 250px 1fr; gap: 20px; }
+        
+        .facets { background: white; padding: 15px; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .facet-section { margin-bottom: 20px; }
+        .facet-section h3 { margin-bottom: 10px; color: #555; font-size: 14px; text-transform: uppercase; }
+        .facet-item { display: flex; align-items: center; padding: 5px 0; cursor: pointer; }
+        .facet-item input { margin-right: 8px; }
+        .facet-item span { flex: 1; }
+        .facet-item .count { color: #888; font-size: 12px; }
+        
+        .products { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px; }
+        .product-card { background: white; border-radius: 4px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .product-card img { width: 100%; height: 150px; object-fit: cover; background: #eee; }
+        .product-card .info { padding: 12px; }
+        .product-card .name { font-weight: 500; margin-bottom: 5px; }
+        .product-card .price { color: #007bff; font-weight: bold; }
+        .product-card .stock { font-size: 12px; color: #666; margin-top: 5px; }
+        
+        .pagination { display: flex; justify-content: center; gap: 10px; margin-top: 20px; }
+        .pagination button { padding: 8px 16px; border: 1px solid #ddd; background: white; cursor: pointer; }
+        .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; padding: 10px; background: white; border-radius: 4px; }
+        .stat { text-align: center; }
+        .stat-value { font-size: 24px; font-weight: bold; color: #007bff; }
+        .stat-label { font-size: 12px; color: #666; }
+        
+        .arch-info { background: #e3f2fd; padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+        .arch-info h3 { margin-bottom: 10px; }
+        .arch-info code { background: #bbdefb; padding: 2px 6px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🦞 CQRS Product Demo (Lite Stack)</h1>
+        
+        <div class="arch-info">
+            <h3>Architecture: PostgreSQL + NATS JetStream + PostgreSQL FTS</h3>
+            <p>
+                <strong>Write Side:</strong> <code>product-backend:8080</code> → PostgreSQL (CRUD)<br>
+                <strong>Read Side:</strong> <code>product-search:8081</code> → PostgreSQL FTS (search + facets)
+            </p>
+        </div>
+        
+        <div class="search-bar">
+            <input type="text" id="searchInput" placeholder="Search products..." onkeypress="if(event.key==='Enter') search()">
+            <button onclick="search()">Search</button>
+        </div>
+        
+        <div class="stats" id="stats">
+            <div class="stat">
+                <div class="stat-value" id="totalProducts">0</div>
+                <div class="stat-label">Total Products</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="responseTime">0ms</div>
+                <div class="stat-label">Response Time</div>
+            </div>
+        </div>
+        
+        <div class="main">
+            <div class="facets" id="facets">
+                <div class="facet-section">
+                    <h3>Categories</h3>
+                    <div id="categoryFacets"></div>
+                </div>
+                <div class="facet-section">
+                    <h3>Brands</h3>
+                    <div id="brandFacets"></div>
+                </div>
+            </div>
+            
+            <div>
+                <div class="products" id="products"></div>
+                <div class="pagination" id="pagination"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let state = {
+            keyword: '',
+            categoryIds: [],
+            brandIds: [],
+            page: 0,
+            size: 10
+        };
+        
+        async function search() {
+            state.keyword = document.getElementById('searchInput').value;
+            state.page = 0;
+            await loadProducts();
+        }
+        
+        async function loadProducts() {
+            const params = new URLSearchParams();
+            if (state.keyword) params.append('keyword', state.keyword);
+            state.categoryIds.forEach(id => params.append('categoryId', id));
+            state.brandIds.forEach(id => params.append('brandId', id));
+            params.append('page', state.page);
+            params.append('size', state.size);
+            
+            try {
+                const startTime = Date.now();
+                const response = await fetch(`/api/search/products?${params}`);
+                const data = await response.json();
+                const endTime = Date.now();
+                
+                renderProducts(data.data);
+                renderFacets(data.facets);
+                renderPagination(data.paging);
+                
+                document.getElementById('totalProducts').textContent = data.paging.totalElement;
+                document.getElementById('responseTime').textContent = (endTime - startTime) + 'ms';
+            } catch (error) {
+                console.error('Search error:', error);
+            }
+        }
+        
+        function renderProducts(products) {
+            const container = document.getElementById('products');
+            if (!products || products.length === 0) {
+                container.innerHTML = '<p style="grid-column: 1/-1; text-align: center; padding: 40px;">No products found</p>';
+                return;
+            }
+            
+            container.innerHTML = products.map(p => `
+                <div class="product-card">
+                    <img src="${p.imageUrl}" alt="${p.name}" onerror="this.src='https://dummyimage.com/600x400/cccccc/000000&text=No+Image'">
+                    <div class="info">
+                        <div class="name">${p.name}</div>
+                        <div class="price">Rp ${p.price.toLocaleString()}</div>
+                        <div class="stock">${p.stock > 0 ? 'In Stock (' + p.stock + ')' : 'Out of Stock'}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function renderFacets(facets) {
+            document.getElementById('categoryFacets').innerHTML = facets.categories.map(c => `
+                <div class="facet-item" onclick="toggleCategory('${c.id}')">
+                    <input type="checkbox" ${c.selected ? 'checked' : ''}>
+                    <span>${c.name}</span>
+                    <span class="count">(${c.count})</span>
+                </div>
+            `).join('');
+            
+            document.getElementById('brandFacets').innerHTML = facets.brands.map(b => `
+                <div class="facet-item" onclick="toggleBrand('${b.id}')">
+                    <input type="checkbox" ${b.selected ? 'checked' : ''}>
+                    <span>${b.name}</span>
+                    <span class="count">(${b.count})</span>
+                </div>
+            `).join('');
+        }
+        
+        function renderPagination(paging) {
+            document.getElementById('pagination').innerHTML = `
+                <button onclick="goToPage(${state.page - 1})" ${state.page === 0 ? 'disabled' : ''}>Previous</button>
+                <span>Page ${paging.page + 1} of ${paging.totalPage || 1}</span>
+                <button onclick="goToPage(${state.page + 1})" ${state.page >= paging.totalPage - 1 ? 'disabled' : ''}>Next</button>
+            `;
+        }
+        
+        function toggleCategory(id) {
+            const index = state.categoryIds.indexOf(id);
+            if (index > -1) state.categoryIds.splice(index, 1);
+            else state.categoryIds.push(id);
+            state.page = 0;
+            loadProducts();
+        }
+        
+        function toggleBrand(id) {
+            const index = state.brandIds.indexOf(id);
+            if (index > -1) state.brandIds.splice(index, 1);
+            else state.brandIds.push(id);
+            state.page = 0;
+            loadProducts();
+        }
+        
+        function goToPage(page) {
+            state.page = page;
+            loadProducts();
+        }
+        
+        loadProducts();
+    </script>
+</body>
+</html>
