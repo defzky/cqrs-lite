@@ -1,4 +1,4 @@
-# CQRS Lite Stack (~500MB total)
+# CQRS Lite Stack (~300MB total with Go services)
 # Arsitektur:
 #   product-backend ──JDBC──▶ postgres ──CDC(Debezium Server)──▶ NATS
 #                                                           │
@@ -102,15 +102,13 @@ services:
 
   product-backend:
     build:
-      context: ./product-backend
+      context: ./product-backend-go
     container_name: product-backend
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/product
-      DB_USERNAME: postgres
-      DB_PASSWORD: postgres123
+      DB_URL: postgres://postgres:postgres123@postgres:5432/product?sslmode=disable
       SERVER_PORT: "8080"
     ports:
       - "8080:8080"
@@ -122,11 +120,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 128M
 
   product-search:
     build:
-      context: ./product-search
+      context: ./product-search-go
     container_name: product-search
     depends_on:
       postgres:
@@ -134,9 +132,7 @@ services:
       nats:
         condition: service_healthy
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/product
-      DB_USERNAME: postgres
-      DB_PASSWORD: postgres123
+      DB_URL: postgres://postgres:postgres123@postgres:5432/product?sslmode=disable
       SERVER_PORT: "8081"
       NATS_URL: nats://nats:4222
     ports:
@@ -149,7 +145,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 128M
 
   frontend:
     build:

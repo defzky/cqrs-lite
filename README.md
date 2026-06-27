@@ -1,13 +1,13 @@
 # CQRS Lite - Product Demo
 
-Stack ringan untuk demo CQRS dengan memory footprint ~500MB.
+Stack ringan untuk demo CQRS dengan memory footprint ~300MB (menggunakan Go).
 
 ## Arsitektur
 
 ```
 PostgreSQL (CDC source)
     │
-    ├── product-backend:8080 (Write Side)
+    ├── product-backend:8080 (Write Side - Go)
     │       └── REST API untuk CRUD produk
     │
     ├── Debezium Server (CDC)
@@ -16,7 +16,7 @@ PostgreSQL (CDC source)
     │
     └── NATS JetStream (Event Streaming)
             │
-            └── product-search:8081 (Read Side)
+            └── product-search:8081 (Read Side - Go)
                     └── Consume events dari NATS
                     └── Update search index (PostgreSQL FTS)
 ```
@@ -27,12 +27,22 @@ PostgreSQL (CDC source)
 |----------|------|--------|------|
 | Database | PostgreSQL 17 | ~150MB | 5433 |
 | Message Broker | NATS JetStream | ~100MB | 4222, 8222 |
-| CDC | Debezium Server 2.7 | ~200MB | - |
-| Backend (Write) | Java 21 + Spring Boot 3.3 | ~200MB | 8080 |
-| Search (Read) | Java 21 + Spring Boot 3.3 | ~200MB | 8081 |
+| CDC | Debezium Server 2.7 (optional) | ~200MB | - |
+| Backend (Write) | Go 1.22 + Chi | ~30MB | 8080 |
+| Search (Read) | Go 1.22 + Chi + pgx | ~30MB | 8081 |
 | Frontend | Nginx | ~10MB | 3000 |
 
-**Total: ~500MB** (sisanya untuk OS)
+**Total: ~300MB** (sisanya untuk OS)
+
+## Keuntungan Migrasi ke Go
+
+| Aspek | Java (Spring Boot) | Go (Chi) |
+|-------|-------------------|----------|
+| Memory per service | ~200MB | ~30MB |
+| Startup time | ~5-10s | <1s |
+| Binary size | ~50MB (JAR) | ~15MB |
+| Total footprint | ~500MB | ~300MB |
+| Garbage collection | G1GC (tunable) | Go GC (automatic) |
 
 ## Quick Start
 
@@ -78,12 +88,14 @@ make test-api
 
 ## Perbandingan dengan Stack Asli
 
-| Aspek | Stack Asli | Stack Lite |
-|-------|------------|------------|
+| Aspek | Stack Asli | Stack Lite (Go) |
+|-------|------------|-----------------|
 | Kafka | Kafka (1.5GB) | NATS JetStream (100MB) |
 | CDC | Debezium Connect (500MB) | Debezium Server (200MB) |
 | Search | OpenSearch (1GB) | PostgreSQL FTS (0MB) |
-| **Total** | **3-4GB** | **~500MB** |
+| Backend | Spring Boot (200MB) | Go Chi (30MB) |
+| Search Service | Spring Boot (200MB) | Go Chi (30MB) |
+| **Total** | **3-4GB** | **~300MB** |
 
 ## Konsep yang Tetap Ada
 
@@ -102,23 +114,64 @@ make test-api
 
 ```
 cqrs-lite/
-├── docker-compose.yml      # Orkestrasi semua services
-├── Makefile                # Helper commands
-├── init-db/               # SQL schema & seed data
+├── docker-compose.yml          # Orkestrasi semua services
+├── Makefile                    # Helper commands
+├── init-db/                    # SQL schema & seed data
 │   └── 01-schema.sql
-├── product-backend/       # Write side (Java)
-│   ├── pom.xml
+├── product-backend-go/         # Write side (Go)
+│   ├── go.mod
 │   ├── Dockerfile
-│   └── src/
-├── product-search/        # Read side (Java)
-│   ├── pom.xml
+│   ├── cmd/main.go
+│   └── internal/
+│       ├── config/
+│       ├── handler/
+│       ├── model/
+│       ├── repository/
+│       └── service/
+├── product-search-go/          # Read side (Go)
+│   ├── go.mod
 │   ├── Dockerfile
-│   └── src/
-└── frontend/              # Web UI
+│   ├── cmd/main.go
+│   └── internal/
+│       ├── config/
+│       ├── handler/
+│       ├── model/
+│       ├── nats/
+│       ├── repository/
+│       └── service/
+├── product-backend/            # Write side (Java - legacy)
+├── product-search/             # Read side (Java - legacy)
+└── frontend/                   # Web UI
     ├── Dockerfile
     ├── nginx.conf
     └── static/
         └── index.html
+```
+
+## Development
+
+### Build Go services locally
+
+```bash
+# Build binaries
+make build-go
+
+# Or test compilation
+make test-go
+```
+
+### Run with Go locally (without Docker)
+
+```bash
+# Set environment variables
+export DB_URL="postgres://postgres:postgres123@localhost:5432/product?sslmode=disable"
+export NATS_URL="nats://localhost:4222"
+
+# Run backend
+cd product-backend-go && go run ./cmd
+
+# Run search (in another terminal)
+cd product-search-go && go run ./cmd
 ```
 
 ## Troubleshooting
@@ -133,3 +186,10 @@ make down && make up
 # Clean semua data
 make clean
 ```
+
+## Libraries Used (Go)
+
+- **Chi** - Lightweight HTTP router
+- **pgx** - PostgreSQL driver and connection pool
+- **nats.go** - NATS client library
+- **google/uuid** - UUID handling
